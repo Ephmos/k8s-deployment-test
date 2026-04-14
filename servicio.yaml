@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Servicio
+metadata:
+  name: mi-servicio
+spec:
+  selector:
+    app: mi-app
+  ports:
+    - protocol: T
+      port: 80
+      targetPort: 8080
+  type: ClusterIP
