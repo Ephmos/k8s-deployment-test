@@ -1,13 +1,18 @@
 ---
 apiVersion: v1
-kind: Servicio
+kind: Service
 metadata:
   name: mi-servicio
+  namespace: default
+  labels:
+    app.kubernetes.io/name: mi-servicio
+    app.kubernetes.io/instance: mi-servicio
 spec:
   selector:
     app: mi-app
   ports:
-    - protocol: T
+    - protocol: TCP
       port: 80
       targetPort: 8080
+      name: http
   type: ClusterIP
