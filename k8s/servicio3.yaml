@@ -1,0 +1,137 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: mi-namespace
+
+---
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mi-config
+  namespace: mi-namespace
+data:
+  APP_PORT: 8080
+  LOG_LEVEL: info
+
+---
+
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mi-secret
+  namespace: mi-namespace
+type: Opaque
+data:
+  PASSWORD: admin123
+
+---
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: mi-namespace
+spec:
+  replicas: "3"
+  selector:
+    matchLabels:
+      app: backend
+      tier: api
+  template:
+    metadata:
+      labels:
+        app: backend
+    spec:
+      containers:
+        - name: backend-container
+          image: myrepo/backend:v1
+          ports:
+            - containerPort: 3000
+          envFrom:
+            - configMapRef:
+                name: mi-config-wrong
+            - secretRef:
+                name: mi-secret
+          env:
+            - name: PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mi-secret
+                  key: password
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 9999
+            initialDelaySeconds: 5
+            periodSeconds: "10"
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 3000
+            failureThreshold: 0
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-service
+  namespace: mi-namespace
+spec:
+  selector:
+    app: backend
+    tier: api
+  ports:
+    - port: 80
+      targetPort: 3001
+      protocol: TCP
+  type: ClusterIP
+
+---
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  namespace: mi-namespace
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: frontend
+  template:
+    metadata:
+      labels:
+        app: frontend-app
+    spec:
+      containers:
+        - name: frontend-container
+          image: nginx
+          ports:
+            - containerPort: 80
+          volumeMounts:
+            - name: config-volume
+              mountPath: /etc/config
+      volumes:
+        - name: config-volume
+          configMap:
+            name: mi-config
+            items:
+              - key: NOT_EXISTING_KEY
+                path: config.txt
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend-service
+  namespace: mi-namespace
+spec:
+  selector:
+    app: frontend
+  ports:
+    - port: 80
+      targetPort: eighty
+  type: LoadBalancer
