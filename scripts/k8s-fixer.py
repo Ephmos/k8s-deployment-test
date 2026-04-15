@@ -1,135 +1,98 @@
 #!/usr/bin/env python3
 """
-Agente de corrección automática para manifiestos YAML de Kubernetes.
-Uso: python k8s-fixer.py <directorio_o_archivo>
+Agente corrector de YAML de Kubernetes usando OpenAI.
+Requiere: pip install openai ruamel.yaml
+Configurar variable de entorno OPENAI_API_KEY.
 """
 
 import os
 import sys
-import random
-import string
 from pathlib import Path
 from ruamel.yaml import YAML
-from ruamel.yaml.scalarstring import DoubleQuotedScalarString as DQ
+from openai import OpenAI
 
-yaml = YAML()
-yaml.preserve_quotes = True
-yaml.indent(mapping=2, sequence=4, offset=2)
+# Configuración de YAML para preservar formato y comentarios
+yaml_loader = YAML()
+yaml_loader.preserve_quotes = True
+yaml_loader.indent(mapping=2, sequence=4, offset=2)
 
-# Mapa de apiVersions obsoletas y sus reemplazos recomendados
-OBSOLETE_API_MAP = {
-    "extensions/v1beta1": {
-        "Deployment": "apps/v1",
-        "Ingress": "networking.k8s.io/v1",
-        "DaemonSet": "apps/v1",
-        "ReplicaSet": "apps/v1"
-    },
-    "apps/v1beta1": {"Deployment": "apps/v1", "StatefulSet": "apps/v1"},
-    "apps/v1beta2": {"Deployment": "apps/v1", "StatefulSet": "apps/v1", "DaemonSet": "apps/v1"},
-    "batch/v1beta1": {"CronJob": "batch/v1"},
-}
+# Cliente OpenAI (se puede ajustar para usar Azure o endpoints compatibles)
+client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
-def random_suffix(length=4):
-    return ''.join(random.choices(string.ascii_lowercase + string.digits, k=length))
+SYSTEM_PROMPT = """Eres un experto en Kubernetes y YAML. Tu tarea es recibir el contenido de un archivo YAML que contiene uno o más recursos de Kubernetes y devolver EXACTAMENTE el mismo contenido pero con las siguientes correcciones y mejoras:
 
-def fix_kubernetes_manifest(data, filepath):
-    """Aplica correcciones a un diccionario que representa un manifiesto K8s."""
-    if not isinstance(data, dict):
-        return False
+1. Corregir errores de sintaxis YAML (indentación incorrecta, caracteres inválidos).
+2. Actualizar apiVersion obsoletas (ej. extensions/v1beta1 -> apps/v1 para Deployments).
+3. Asegurar que cada recurso tenga 'apiVersion', 'kind' y 'metadata.name'. Si falta 'name', invéntalo basado en 'kind' + sufijo corto aleatorio.
+4. Agregar 'namespace: default' a recursos con namespace si no existe y no son cluster-scoped.
+5. Para Deployments/StatefulSets: sincronizar spec.selector.matchLabels con spec.template.metadata.labels.
+6. Agregar etiquetas recomendadas: app.kubernetes.io/name, app.kubernetes.io/instance (usando el nombre del recurso).
+7. Corregir referencias a imágenes (ej. cambiar 'latest' por una versión específica sugerida, o añadir 'imagePullPolicy: IfNotPresent').
+8. Asegurar que los Services tengan 'ports.name' si hay más de un puerto.
 
-    modified = False
+IMPORTANTE:
+- Devuelve SOLO el YAML corregido, sin explicaciones, sin markdown, sin texto adicional.
+- Preserva los comentarios existentes en la medida de lo posible.
+- Si el YAML contiene múltiples documentos separados por '---', mantén esa estructura.
+- No cambies nombres de recursos intencionalmente, excepto cuando sea necesario generar uno.
+- Responde únicamente con el YAML válido."""
 
-    # 1. Verificar campos obligatorios
-    if "apiVersion" not in data:
-        print(f"  ⚠️  Falta apiVersion en {filepath}, se asume 'v1' (puede requerir ajuste manual)")
-        data["apiVersion"] = "v1"
-        modified = True
+def fix_yaml_with_ai(content: str) -> str:
+    """Envía el contenido a OpenAI y devuelve la versión corregida."""
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",  # o "gpt-3.5-turbo" para menor coste
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": content}
+            ],
+            temperature=0.1,  # Baja temperatura para resultados deterministas
+        )
+        corrected = response.choices[0].message.content
+        # Limpiar posibles delimitadores de código
+        if corrected.startswith("```yaml"):
+            corrected = corrected[7:]
+        if corrected.startswith("```"):
+            corrected = corrected[3:]
+        if corrected.endswith("```"):
+            corrected = corrected[:-3]
+        return corrected.strip()
+    except Exception as e:
+        print(f"  ❌ Error al llamar a OpenAI: {e}")
+        return content  # En caso de error, no modificar
 
-    if "kind" not in data:
-        print(f"  ❌ Falta 'kind' en {filepath}, no se puede corregir automáticamente.")
-        return modified
-
-    kind = data.get("kind", "")
-
-    # 2. Actualizar apiVersion obsoleta
-    current_api = data.get("apiVersion")
-    if current_api in OBSOLETE_API_MAP and kind in OBSOLETE_API_MAP[current_api]:
-        new_api = OBSOLETE_API_MAP[current_api][kind]
-        print(f"  🔄 Actualizando apiVersion: {current_api} -> {new_api} para {kind}")
-        data["apiVersion"] = new_api
-        modified = True
-
-    # 3. Asegurar metadata
-    if "metadata" not in data:
-        data["metadata"] = {}
-        modified = True
-
-    metadata = data["metadata"]
-
-    if "name" not in metadata:
-        generated_name = f"{kind.lower()}-{random_suffix()}"
-        print(f"  🏷️  Generando metadata.name: {generated_name}")
-        metadata["name"] = generated_name
-        modified = True
-
-    if "namespace" not in metadata:
-        # Opcional: agregar 'default' o dejarlo sin namespace (cluster-scoped)
-        if kind not in ["Namespace", "ClusterRole", "ClusterRoleBinding", "StorageClass", "PersistentVolume"]:
-            metadata["namespace"] = "default"
-            modified = True
-
-    # 4. Correcciones específicas por kind
-    if kind in ["Deployment", "StatefulSet", "DaemonSet", "ReplicaSet"]:
-        # Asegurar que spec.selector.matchLabels coincida con spec.template.metadata.labels
-        spec = data.get("spec", {})
-        selector = spec.get("selector", {})
-        template_metadata = spec.get("template", {}).get("metadata", {})
-
-        if not selector.get("matchLabels") and template_metadata.get("labels"):
-            # Si no hay matchLabels pero sí labels en el template, copiar
-            selector["matchLabels"] = template_metadata["labels"].copy()
-            spec["selector"] = selector
-            data["spec"] = spec
-            print(f"  🔗 Sincronizando selector.matchLabels con template.labels")
-            modified = True
-
-    if kind == "Service":
-        # Corregir puertos sin nombre (requerido en algunos entornos)
-        ports = data.get("spec", {}).get("ports", [])
-        for idx, port in enumerate(ports):
-            if "name" not in port:
-                port["name"] = f"port-{idx}"
-                modified = True
-                print(f"  🌐 Agregando nombre a puerto {port.get('port')}: {port['name']}")
-
-    return modified
-
-def process_file(filepath):
-    """Procesa un archivo YAML (puede contener múltiples documentos)."""
+def process_file(filepath: Path) -> bool:
+    """Lee el archivo, lo envía a la IA y sobrescribe si hay cambios."""
     try:
         with open(filepath, 'r', encoding='utf-8') as f:
-            docs = list(yaml.load_all(f))
+            original_content = f.read()
     except Exception as e:
-        print(f"❌ Error al leer {filepath}: {e}")
+        print(f"❌ No se pudo leer {filepath}: {e}")
         return False
 
-    modified_any = False
-    for doc_idx, doc in enumerate(docs):
-        if doc is None:
-            continue
-        if fix_kubernetes_manifest(doc, f"{filepath}#doc{doc_idx}"):
-            modified_any = True
+    print(f"🤖 Analizando {filepath}...")
+    corrected_content = fix_yaml_with_ai(original_content)
 
-    if modified_any:
-        # Escribir de vuelta preservando comentarios y estructura
-        with open(filepath, 'w', encoding='utf-8') as f:
-            yaml.dump_all(docs, f)
-        print(f"✅ Archivo corregido: {filepath}")
-    return modified_any
+    if corrected_content == original_content.strip():
+        return False
+
+    # Validar que el resultado sea YAML parseable (opcional)
+    try:
+        list(yaml_loader.load_all(corrected_content))
+    except Exception as e:
+        print(f"⚠️ La IA generó YAML inválido para {filepath}: {e}")
+        print("   Se conserva el archivo original.")
+        return False
+
+    # Escribir cambios
+    with open(filepath, 'w', encoding='utf-8') as f:
+        f.write(corrected_content)
+    print(f"✅ {filepath} corregido por IA.")
+    return True
 
 def main():
     if len(sys.argv) < 2:
-        print("Uso: python k8s-fixer.py <directorio|archivo>")
+        print("Uso: python ai_k8s_fixer.py <directorio|archivo>")
         sys.exit(1)
 
     target = Path(sys.argv[1])
@@ -144,7 +107,7 @@ def main():
         if process_file(yf):
             fixed_count += 1
 
-    print(f"\n📊 Procesados {len(yaml_files)} archivos. Corregidos: {fixed_count}")
+    print(f"\n📊 Procesados {len(yaml_files)} archivos. Corregidos por IA: {fixed_count}")
 
 if __name__ == "__main__":
     main()
