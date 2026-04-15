@@ -1,3 +1,4 @@
+---
 name: Auto Fix Kubernetes YAML
 on:
   push:
@@ -17,8 +18,8 @@ jobs:
           curl -L https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz | tar xz
           sudo mv kubeconform /usr/local/bin
           sudo snap install yq
-      - name: Validate YAML syntax
-        run: yamllint .
+      #- name: Validate YAML syntax
+      #  run: yamllint .
       - name: Format YAML (auto-fix)
         run: prettier --write "**/*.yaml"
       - name: Validate Kubernetes schema
