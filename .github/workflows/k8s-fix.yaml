@@ -23,7 +23,7 @@ jobs:
       - name: Format YAML (auto-fix)
         run: prettier --write "**/*.yaml"
       - name: Validate Kubernetes schema
-        run: kubeconform -strict -ignore-missing-schemas k8s.yaml
+        run: kubeconform -strict -ignore-missing-schemas servicio.yaml
       - name: AI fix (optional advanced)
         run: python fix_k8s.py
       - name: Auto-fix common issues
