@@ -45,7 +45,7 @@ jobs:
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
-          python scripts/ai_k8s_fixer.py k8s/
+          python scripts/k8s_fixer.py k8s/
 
       - name: Verificar cambios
         id: changes
