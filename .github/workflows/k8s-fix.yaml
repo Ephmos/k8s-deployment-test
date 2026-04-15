@@ -13,11 +13,16 @@ jobs:
       - name: Install tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y yamllint
           npm install -g prettier
           curl -L https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz | tar xz
           sudo mv kubeconform /usr/local/bin
           sudo snap install yq
+      - name: Python Installation
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install py dependencies
+        run: pip install -r requirements.txt || true
       #- name: Validate YAML syntax
       #  run: yamllint .
       - name: Format YAML (auto-fix)
