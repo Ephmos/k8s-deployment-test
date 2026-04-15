@@ -4,24 +4,27 @@ metadata:
   name: mi-app
   labels:
     app: mi-app
+    app.kubernetes.io/name: mi-app
+    app.kubernetes.io/instance: mi-app
 spec:
   containers:
     - name: mi-container
-      image: nginx:lates   # ❌ typo en "latest"
+      image: nginx:1.21.6 # Cambiado a una versión específica
+      imagePullPolicy: IfNotPresent
       ports:
-        - containerPort: "80"   # ❌ debería ser integer, no string
+        - containerPort: 80
       env:
         - name: ENVIRONMENT
           value: production
         - name: DEBUG
-          value: false   # ❌ debería ser string ("false")
+          value: "false" # Cambiado a string
       resources:
         limits:
           memory: "128Mi"
           cpu: "500m"
         requests:
-          memory: 64Mi
-          cpu: 250m
+          memory: "64Mi"
+          cpu: "250m"
   restartPolicy: Always
 
 ---
@@ -36,7 +39,7 @@ spec:
   ports:
     - protocol: TCP
       port: 80
-      targetPort: 8080   # ❌ el contenedor expone 80, no 8080
+      targetPort: 80 # Corregido para coincidir con el contenedor
   type: ClusterIP
 
 ---
@@ -45,11 +48,14 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: mi-deployment
+  labels:
+    app.kubernetes.io/name: mi-deployment
+    app.kubernetes.io/instance: mi-deployment
 spec:
   replicas: 2
   selector:
     matchLabels:
-      app: mi-app-wrong   # ❌ no coincide con el Pod
+      app: mi-app # Corregido para coincidir con el Pod
   template:
     metadata:
       labels:
@@ -57,6 +63,7 @@ spec:
     spec:
       containers:
         - name: mi-container
-          image: nginx:latest
+          image: nginx:1.21.6 # Cambiado a una versión específica
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 80
