@@ -9,7 +9,7 @@ metadata:
 spec:
   containers:
     - name: mi-container
-      image: nginx:1.21.6 # Cambiado a una versión específica
+      image: nginx:1.21.6
       imagePullPolicy: IfNotPresent
       ports:
         - containerPort: 80
@@ -17,7 +17,7 @@ spec:
         - name: ENVIRONMENT
           value: production
         - name: DEBUG
-          value: "false" # Cambiado a string
+          value: "false"
       resources:
         limits:
           memory: "128Mi"
@@ -33,13 +33,15 @@ apiVersion: v1
 kind: Service
 metadata:
   name: mi-servicio
+  namespace: default
 spec:
   selector:
     app: mi-app
   ports:
     - protocol: TCP
       port: 80
-      targetPort: 80 # Corregido para coincidir con el contenedor
+      targetPort: 80
+      name: http
   type: ClusterIP
 
 ---
@@ -55,7 +57,7 @@ spec:
   replicas: 2
   selector:
     matchLabels:
-      app: mi-app # Corregido para coincidir con el Pod
+      app: mi-app
   template:
     metadata:
       labels:
@@ -63,7 +65,7 @@ spec:
     spec:
       containers:
         - name: mi-container
-          image: nginx:1.21.6 # Cambiado a una versión específica
+          image: nginx:1.21.6
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 80
