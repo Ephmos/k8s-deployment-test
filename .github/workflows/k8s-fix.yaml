@@ -1,63 +1,111 @@
-name: Auto Fix Kubernetes YAML
+name: Kubernetes YAML Lint & Auto-fix
+
 on:
+  push:
+    paths:
+      - 'k8s/**/*.yaml'
+      - 'k8s/**/*.yml'
   pull_request:
-    branches: [ main ]
+    paths:
+      - 'k8s/**/*.yaml'
+      - 'k8s/**/*.yml'
+  workflow_dispatch:  # Permite ejecución manual
+
+permissions:
+  contents: write      # Necesario para hacer push de correcciones automáticas
+  pull-requests: write # Opcional: para comentar en PRs
+
 jobs:
-  fix:
+  lint-and-fix:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout código
+        uses: actions/checkout@v4
         with:
-          ref: ${{ github.head_ref }}
-      - name: Install tools
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configurar Python (para script de corrección)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar herramientas necesarias
         run: |
-          npm install -g prettier
-          curl -L https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz | tar xz
-          sudo mv kubeconform /usr/local/bin
+          # kubeconform (validador de esquemas Kubernetes)
+          curl -LO https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz
+          tar xzf kubeconform-linux-amd64.tar.gz
+          sudo mv kubeconform /usr/local/bin/
+          rm kubeconform-linux-amd64.tar.gz
+
+          # yq (procesador YAML para línea de comandos)
           sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
           sudo chmod +x /usr/local/bin/yq
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - name: Install Python dependencies
-        run: pip install -r requirements.txt
-      - name: Find all Kubernetes YAML files
-        id: find
+
+          # yamlfmt (formateador automático de YAML)
+          go install github.com/google/yamlfmt/cmd/yamlfmt@latest
+          echo "$HOME/go/bin" >> $GITHUB_PATH
+
+          # Instalar dependencias Python (ruamel.yaml para preservar comentarios)
+          pip install ruamel.yaml
+
+      - name: Ejecutar kubeconform (validación estricta)
+        id: validate
+        continue-on-error: true  # No detiene el flujo, queremos intentar corregir
         run: |
-          # Exclude common non-manifest files
-          shopt -s globstar
-          files=(**/*.yaml **/*.yml)
-          for f in "${files[@]}"; do
-            if [[ ! "$f" =~ (values|Chart|requirements|\.github) ]]; then
-              echo "$f" >> k8s_files.txt
-            fi
-          done
-      - name: Validate against Kubernetes schemas
-        continue-on-error: true   # allow fixes to run even if validation fails
+          echo "🔍 Validando archivos YAML con kubeconform..."
+          kubeconform -summary -ignore-missing-schemas -strict -skip "CustomResourceDefinition" k8s/
+
+      - name: Formatear YAML (yamlfmt)
         run: |
-          while IFS= read -r file; do
-            kubeconform -strict -summary "$file"
-          done < k8s_files.txt
-      - name: Auto-fix formatting
-        run: prettier --write $(cat k8s_files.txt)
-      - name: Auto-fix common schema issues (e.g., replicas type)
-        run: |
-          while IFS= read -r file; do
-            # Convert string replicas to int, but only where the schema expects an integer
-            yq eval '(.spec.replicas | select(type == "!!str")) |= tonumber' -i "$file"
-            # Add more fixes as needed (e.g., imagePullPolicy)
-          done < k8s_files.txt
-      - name: Run advanced AI fixes (if script exists)
-        run: python fix_k8s.py || echo "No fix_k8s.py found, skipping"
-      - name: Commit and push fixes
-        if: github.event_name == 'pull_request'
-        run: |
-          git config user.name "auto-fix-bot"
-          git config user.email "bot@example.com"
-          git add .
-          if ! git diff --quiet --staged; then
-            git commit -m "chore: auto-fix Kubernetes manifests [skip ci]"
-            git push
+          echo "🎨 Aplicando formateo estándar YAML..."
+          # Crea configuración mínima para yamlfmt si no existe
+          if [ ! -f .yamlfmt ]; then
+            cat > .yamlfmt <<EOF
+          formatter:
+            type: basic
+            include_document_start: true
+            retain_line_breaks: true
+          EOF
           fi
+          yamlfmt -formatter retain_line_breaks=true k8s/**/*.yaml
+
+      - name: Ejecutar script de corrección inteligente (agente)
+        run: |
+          echo "🤖 Ejecutando agente corrector de manifiestos Kubernetes..."
+          python scripts/k8s-fixer.py k8s/
+
+      - name: Verificar cambios generados
+        id: changes
+        run: |
+          if [[ -n $(git status -s) ]]; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "📝 Cambios detectados:"
+            git status -s
+          else
+            echo "changed=false" >> $GITHUB_OUTPUT
+            echo "✅ No se requieren correcciones."
+          fi
+
+      - name: Commit y push de correcciones (solo si hay cambios)
+        if: steps.changes.outputs.changed == 'true'
+        run: |
+          git config user.name "k8s-fixer[bot]"
+          git config user.email "k8s-fixer[bot]@users.noreply.github.com"
+          git add k8s/
+          git commit -m "🤖 Auto-corrección de manifiestos Kubernetes"
+          git push
+
+      - name: Comentar en PR (opcional, si el evento es pull_request)
+        if: github.event_name == 'pull_request' && steps.changes.outputs.changed == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { repo, owner } = context.repo;
+            const issue_number = context.issue.number;
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number,
+              body: '⚠️ Se detectaron problemas en los manifiestos Kubernetes y se aplicaron correcciones automáticas. Revisa el commit más reciente.'
+            });
